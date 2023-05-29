@@ -5,6 +5,9 @@ checkpoints/*
 *.pt
 wandb/
 *.zip
+vofo/*
+vocal-fold/*
+vocal-folds/*
 
 # Repo-specific GitIgnore ----------------------------------------------------------------------------------------------
 *.jpg

@@ -8,6 +8,7 @@ import albumentations as A
 
 import torch
 import torch.nn as nn
+from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader, default_collate
 import timm
 
@@ -33,7 +34,7 @@ def get_cls_model():
     
     model = timm.create_model("tf_efficientnet_b0", num_classes=4)
     checkpoint = torch.load(
-        "~/meal/checkpoints/cls_model.pth", map_location=torch.device('cpu')
+        str(ROOT / "checkpoints" / "cls_model.pth"), map_location=torch.device('cpu')
     )["model"]
     model.load_state_dict(overwrite_key(checkpoint))
     model.cuda()
@@ -46,7 +47,7 @@ def get_backbone_model():
     device = ""
     device = select_device(device)
     model = DetectMultiBackend(
-        weights="~/meal/checkpoints/backbone.pt",
+        weights=str(ROOT / "checkpoints" / "backbone.pt"),
         device=device,
         dnn=dnn,
         data=None,
@@ -85,11 +86,11 @@ def collate_fn(batch):
 
 
 def get_dataloaders(train_transforms, val_transforms, batch_size, fold=0):
-    train_ds = VofoDataset("~/vocal-folds", train_val="train",
+    train_ds = VofoDataset("./vocal-folds", train_val="train",
                                  transform=train_transforms, fold=fold)
     train_dl = DataLoader(train_ds, batch_size=batch_size, drop_last=False, collate_fn=collate_fn, shuffle=True)
 
-    val_ds = VofoDataset("~/vocal-folds", train_val="val", fold=fold,
+    val_ds = VofoDataset("./vocal-folds", train_val="val", fold=fold,
                                transform=val_transforms)
     val_dl = DataLoader(val_ds, batch_size=batch_size, drop_last=False, collate_fn=collate_fn, shuffle=True)
 
@@ -113,7 +114,7 @@ class VofoDataset(Dataset):
     	
     def __init__(self, root_dir, train_val, fold=0, transform=None, target_transform=None):	
         super().__init__()	
-        self.root_dir = Path("~/vocal-folds/")	
+        self.root_dir = Path("./vocal-folds/")	
         self.train_val = train_val	
         self.fold = fold	
         self.transform = transform	

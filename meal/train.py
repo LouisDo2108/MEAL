@@ -14,10 +14,9 @@ import torch.nn as nn
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
-
+sys.path.remove(str(ROOT / 'meal'))
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
-
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from utils.general import LOGGER
@@ -25,7 +24,7 @@ from meal.models import MEAL_with_masked_attention, MEAL, init_model
 from meal.datasets import get_dataloaders, get_transforms
 
 
-def train(model, params, model_name):
+def train(model, params):
 
     num_epochs = params["num_epochs"]
     loss_func = params["loss_func"]
@@ -34,6 +33,7 @@ def train(model, params, model_name):
     val_dl = params["val_dl"]
     lr_scheduler = params["lr_scheduler"]
     save_path = params["save_path"]
+    model_name = params["model_name"]
 
     # history of loss values in each epoch
     loss_history = {
@@ -175,13 +175,13 @@ if __name__ == "__main__":
         "train_dl": train_dl,
         "val_dl": val_dl,
         "lr_scheduler": lr_scheduler,
-        "save_path": "~/checkpoints/new_model.pt"
+        "save_path": "./checkpoints/new_model.pt",
+        "model_name": "MEAL" # MEAL or MEAL_with_masked_attention
     }
     
     model, loss_hist, metric_hist = train(
         model=model,
         params=params,
-        model_name=model_name,
     )
     
     

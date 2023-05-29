@@ -1,8 +1,8 @@
 #!/bin/bash
 eval "$(conda shell.bash hook)"
-conda activate meal # Change this according to your environment's name.
+conda activate meal
 
-cd ~/meal
+cd meal
 
 # Train backbone
 python train.py \
@@ -20,14 +20,16 @@ python val.py \
 --verbose --save-json \
 --name backbone
 
-# Trai MEAL
-python train.py
+# # Train MEAL
+python meal/train.py
 
-# Validate MEAL
-python val.py \
+# # Validate MEAL
+python meal/val.py \
 --img 480 --batch 1 \
 --data vofo/annotations/vofo.yaml \
---weights checkpoints/meal.pt \
+--weights checkpoints/backbone.pt \
+--meal-path checkpoints/meal_with_masked_attention.pt \
+--meal-type MEAL_with_masked_attention \
 --verbose \
 --save-json \
 --name test

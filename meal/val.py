@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
+sys.path.remove(str(ROOT / 'meal'))
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
@@ -126,6 +127,8 @@ def run(
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
+        meal_path=None,
+        meal_type="MEAL"
 ):
     # Initialize/load model and set device
     training = model is not None
@@ -197,16 +200,16 @@ def run(
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
     
-    backbone_model = get_backbone_model()
+    cls_model = get_cls_model()
     cls_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((256, 256)),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
     meal = get_meal(
-        model_path="~/checkpoints/meal.pt", 
-        model_name="MEAL")
-    backbone_model.eval()
+        model_path=meal_path[0], 
+        model_name=meal_type)
+    cls_model.eval()
     meal.eval()
     
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -245,7 +248,7 @@ def run(
 
             with torch.no_grad():
                 # Get global feature vector from classification model
-                global_feature = backbone_model.forward_features(image)
+                global_feature = cls_model.forward_features(image)
 
         # Get bounding box output from backbone
         bbox_preds = preds[0].clone()
@@ -262,7 +265,7 @@ def run(
             meal_pred = []
             
             # Since an image might have multiple bbox, hence multiple classifications, we do a majority voting
-            if isinstance(MEAL, REAL):
+            if isinstance(MEAL, MEAL_with_masked_attention):
                 last_index = 0
                 for box in bboxes:
                     if len(box) <= 0:
@@ -379,22 +382,22 @@ def run(
         with open(pred_json, 'w') as f:
             json.dump(jdict, f)
 
-        try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
-            check_requirements('pycocotools>=2.0.6')
-            from pycocotools.coco import COCO
-            from pycocotools.cocoeval import COCOeval
+        # try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
+        #     check_requirements('pycocotools>=2.0.6')
+        #     from pycocotools.coco import COCO
+        #     from pycocotools.cocoeval import COCOeval
 
-            anno = COCO(anno_json)  # init annotations api
-            pred = anno.loadRes(pred_json)  # init predictions api
-            eval = COCOeval(anno, pred, 'bbox')
-            if is_coco:
-                eval.params.imgIds = [int(Path(x).stem) for x in dataloader.dataset.im_files]  # image IDs to evaluate
-            eval.evaluate()
-            eval.accumulate()
-            eval.summarize()
-            map, map50 = eval.stats[:2]  # update results (mAP@0.5:0.95, mAP@0.5)
-        except Exception as e:
-            LOGGER.info(f'pycocotools unable to run: {e}')
+        #     anno = COCO(anno_json)  # init annotations api
+        #     pred = anno.loadRes(pred_json)  # init predictions api
+        #     eval = COCOeval(anno, pred, 'bbox')
+        #     if is_coco:
+        #         eval.params.imgIds = [int(Path(x).stem) for x in dataloader.dataset.im_files]  # image IDs to evaluate
+        #     eval.evaluate()
+        #     eval.accumulate()
+        #     eval.summarize()
+        #     map, map50 = eval.stats[:2]  # update results (mAP@0.5:0.95, mAP@0.5)
+        # except Exception as e:
+        #     LOGGER.info(f'pycocotools unable to run: {e}')
 
     # Return results
     model.float()  # for training
@@ -431,6 +434,8 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    parser.add_argument('--meal-path', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
+    parser.add_argument('--meal-type', default='MEAL', help='save to project/name')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
