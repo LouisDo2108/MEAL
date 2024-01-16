@@ -11,10 +11,11 @@ from pathlib import Path
 import numpy as np
 import torch
 from tqdm import tqdm
+from pdb import set_trace as st
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
-sys.path.remove(str(ROOT / 'meal'))
+sys.path.remove(str(ROOT / "meal"))
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
@@ -22,9 +23,23 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
-from utils.general import (LOGGER, TQDM_BAR_FORMAT, Profile, check_dataset, check_img_size, check_requirements,
-                           check_yaml, coco80_to_coco91_class, colorstr, increment_path, non_max_suppression,
-                           print_args, scale_boxes, xywh2xyxy, xyxy2xywh)
+from utils.general import (
+    LOGGER,
+    TQDM_BAR_FORMAT,
+    Profile,
+    check_dataset,
+    check_img_size,
+    check_requirements,
+    check_yaml,
+    coco80_to_coco91_class,
+    colorstr,
+    increment_path,
+    non_max_suppression,
+    print_args,
+    scale_boxes,
+    xywh2xyxy,
+    xyxy2xywh,
+)
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, smart_inference_mode
@@ -37,7 +52,7 @@ def get_meal(model_path, model_name="MEAL"):
         meal = MEAL(roip_output_size=(8, 8), dim=896)
     elif model_name == "MEAL_with_masked_attention":
         meal = MEAL_with_masked_attention(dim=896)
-    
+
     meal.load_state_dict(torch.load(model_path))
     meal.cuda()
     return meal
@@ -53,10 +68,12 @@ def save_one_txt(predn, save_conf, shape, file):
     # Save one txt result
     gn = torch.tensor(shape)[[1, 0, 1, 0]]  # normalization gain whwh
     for *xyxy, conf, cls in predn.tolist():
-        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+        xywh = (
+            (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()
+        )  # normalized xywh
         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-        with open(file, 'a') as f:
-            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+        with open(file, "a") as f:
+            f.write(("%g " * len(line)).rstrip() % line + "\n")
 
 
 def save_one_json(predn, jdict, path, class_map):
@@ -65,11 +82,14 @@ def save_one_json(predn, jdict, path, class_map):
     box = xyxy2xywh(predn[:, :4])  # xywh
     box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
     for p, b in zip(predn.tolist(), box.tolist()):
-        jdict.append({
-            'image_id': image_id,
-            'category_id': class_map[int(p[5])],
-            'bbox': [round(x, 3) for x in b],
-            'score': round(p[4], 5)})
+        jdict.append(
+            {
+                "image_id": image_id,
+                "category_id": class_map[int(p[5])],
+                "bbox": [round(x, 3) for x in b],
+                "score": round(p[4], 5),
+            }
+        )
 
 
 def process_batch(detections, labels, iouv):
@@ -85,9 +105,15 @@ def process_batch(detections, labels, iouv):
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
     for i in range(len(iouv)):
-        x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
+        x = torch.where(
+            (iou >= iouv[i]) & correct_class
+        )  # IoU > threshold and classes match
         if x[0].shape[0]:
-            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
+            matches = (
+                torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1)
+                .cpu()
+                .numpy()
+            )  # [label, detect, iou]
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
@@ -99,52 +125,64 @@ def process_batch(detections, labels, iouv):
 
 @smart_inference_mode()
 def run(
-        data,
-        weights=None,  # model.pt path(s)
-        batch_size=32,  # batch size
-        imgsz=640,  # inference size (pixels)
-        conf_thres=0.001,  # confidence threshold
-        iou_thres=0.6,  # NMS IoU threshold
-        max_det=300,  # maximum detections per image
-        task='val',  # train, val, test, speed or study
-        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-        workers=8,  # max dataloader workers (per RANK in DDP mode)
-        single_cls=False,  # treat as single-class dataset
-        augment=False,  # augmented inference
-        verbose=False,  # verbose output
-        save_txt=False,  # save results to *.txt
-        save_hybrid=False,  # save label+prediction hybrid results to *.txt
-        save_conf=False,  # save confidences in --save-txt labels
-        save_json=False,  # save a COCO-JSON results file
-        project=ROOT / 'runs/val',  # save to project/name
-        name='exp',  # save to project/name
-        exist_ok=False,  # existing project/name ok, do not increment
-        half=True,  # use FP16 half-precision inference
-        dnn=False,  # use OpenCV DNN for ONNX inference
-        model=None,
-        dataloader=None,
-        save_dir=Path(''),
-        plots=True,
-        callbacks=Callbacks(),
-        compute_loss=None,
-        meal_path=None,
-        meal_type="MEAL"
+    data,
+    weights=None,  # model.pt path(s)
+    batch_size=32,  # batch size
+    imgsz=640,  # inference size (pixels)
+    conf_thres=0.001,  # confidence threshold
+    iou_thres=0.6,  # NMS IoU threshold
+    max_det=300,  # maximum detections per image
+    task="val",  # train, val, test, speed or study
+    device="",  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+    workers=8,  # max dataloader workers (per RANK in DDP mode)
+    single_cls=False,  # treat as single-class dataset
+    augment=False,  # augmented inference
+    verbose=False,  # verbose output
+    save_txt=False,  # save results to *.txt
+    save_hybrid=False,  # save label+prediction hybrid results to *.txt
+    save_conf=False,  # save confidences in --save-txt labels
+    save_json=False,  # save a COCO-JSON results file
+    project=ROOT / "runs/val",  # save to project/name
+    name="exp",  # save to project/name
+    exist_ok=False,  # existing project/name ok, do not increment
+    half=True,  # use FP16 half-precision inference
+    dnn=False,  # use OpenCV DNN for ONNX inference
+    model=None,
+    dataloader=None,
+    save_dir=Path(""),
+    plots=True,
+    callbacks=Callbacks(),
+    compute_loss=None,
+    meal_path=None,
+    meal_type="MEAL",
 ):
+    bad = []
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
-        device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
-        half &= device.type != 'cpu'  # half precision only supported on CUDA
+        device, pt, jit, engine = (
+            next(model.parameters()).device,
+            True,
+            False,
+            False,
+        )  # get model device, PyTorch model
+        half &= device.type != "cpu"  # half precision only supported on CUDA
         model.half() if half else model.float()
     else:  # called directly
         device = select_device(device, batch_size=batch_size)
 
         # Directories
-        save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
-        (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+        save_dir = increment_path(
+            Path(project) / name, exist_ok=exist_ok
+        )  # increment run
+        (save_dir / "labels" if save_txt else save_dir).mkdir(
+            parents=True, exist_ok=True
+        )  # make dir
 
         # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+        model = DetectMultiBackend(
+            weights, device=device, dnn=dnn, data=data, fp16=half
+        )
         stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half = model.fp16  # FP16 supported on limited backends with CUDA
@@ -154,16 +192,20 @@ def run(
             device = model.device
             if not (pt or jit):
                 batch_size = 1  # export.py models default to batch-size 1
-                LOGGER.info(f'Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models')
+                LOGGER.info(
+                    f"Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models"
+                )
 
         # Data
         data = check_dataset(data)  # check
 
     # Configure
     model.eval()
-    cuda = device.type != 'cpu'
-    is_coco = isinstance(data.get('val'), str) and data['val'].endswith(f'coco{os.sep}val2017.txt')  # COCO dataset
-    nc = 1 if single_cls else int(data['nc'])  # number of classes
+    cuda = device.type != "cpu"
+    is_coco = isinstance(data.get("val"), str) and data["val"].endswith(
+        f"coco{os.sep}val2017.txt"
+    )  # COCO dataset
+    nc = 1 if single_cls else int(data["nc"])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
@@ -171,49 +213,79 @@ def run(
     if not training:
         if pt and not single_cls:  # check --weights are trained on --data
             ncm = model.model.nc
-            assert ncm == nc, f'{weights} ({ncm} classes) trained on different --data than what you passed ({nc} ' \
-                              f'classes). Pass correct combination of --weights and --data that are trained together.'
+            assert ncm == nc, (
+                f"{weights} ({ncm} classes) trained on different --data than what you passed ({nc} "
+                f"classes). Pass correct combination of --weights and --data that are trained together."
+            )
         model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
-        pad, rect = (0.0, False)# if task == 'speed' else (0.5, pt)  # square inference for benchmarks
-        task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
-        dataloader = create_dataloader(data[task],
-                                       imgsz,
-                                       batch_size,
-                                       stride,
-                                       single_cls,
-                                       pad=pad,
-                                       rect=rect,
-                                       workers=workers,
-                                       prefix=colorstr(f'{task}: '))[0]
+        pad, rect = (
+            0.0,
+            False,
+        )  # if task == 'speed' else (0.5, pt)  # square inference for benchmarks
+        task = (
+            task if task in ("train", "val", "test") else "val"
+        )  # path to train/val/test images
+        dataloader = create_dataloader(
+            data[task],
+            imgsz,
+            batch_size,
+            stride,
+            single_cls,
+            pad=pad,
+            rect=rect,
+            workers=workers,
+            prefix=colorstr(f"{task}: "),
+        )[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = model.names if hasattr(model, 'names') else model.module.names  # get class names
+    names = (
+        model.names if hasattr(model, "names") else model.module.names
+    )  # get class names
     if isinstance(names, (list, tuple)):  # old format
         names = dict(enumerate(names))
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
-    s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
-    tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    s = ("%22s" + "%11s" * 6) % (
+        "Class",
+        "Images",
+        "Instances",
+        "P",
+        "R",
+        "mAP50",
+        "mAP50-95",
+    )
+    tp, fp, p, r, f1, mp, mr, map50, ap50, map = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
     dt = Profile(), Profile(), Profile()  # profiling times
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
-    callbacks.run('on_val_start')
+    callbacks.run("on_val_start")
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-    
-    cls_model = get_cls_model()
-    cls_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((256, 256)),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
-    meal = get_meal(
-        model_path=meal_path[0], 
-        model_name=meal_type)
+
+    cls_model = get_cls_model(fold=0)
+    cls_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Resize((256, 256)),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
+    meal = get_meal(model_path=meal_path[0], model_name=meal_type)
     cls_model.eval()
     meal.eval()
-    
+
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-        callbacks.run('on_val_batch_start')
+        callbacks.run("on_val_batch_start")
         with dt[0]:
             if cuda:
                 im = im.to(device, non_blocking=True)
@@ -222,22 +294,32 @@ def run(
             im /= 255  # 0 - 255 to 0.0 - 1.0
             nb, _, height, width = im.shape  # batch size, channels, height, width
             # LOGGER.info("im.shape: {}".format(im.shape))
-            
+
         # Inference
         with dt[1]:
-           small, medium, large, preds = model(im, feature_map=True) if compute_loss else model(im, augment=augment, feature_map=True)
+            small, medium, large, preds = (
+                model(im, feature_map=True)
+                if compute_loss
+                else model(im, augment=augment, feature_map=True)
+            )
 
         # NMS
-        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
-        lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
+        targets[:, 2:] *= torch.tensor(
+            (width, height, width, height), device=device
+        )  # to pixels
+        lb = (
+            [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []
+        )  # for autolabelling
         with dt[2]:
-            preds = non_max_suppression(preds,
-                                        conf_thres,
-                                        iou_thres,
-                                        labels=lb,
-                                        multi_label=True,
-                                        agnostic=single_cls,
-                                        max_det=max_det)
+            preds = non_max_suppression(
+                preds,
+                conf_thres,
+                iou_thres,
+                labels=lb,
+                multi_label=True,
+                agnostic=single_cls,
+                max_det=max_det,
+            )
         # New #
         # Get global feature
         for path in paths:
@@ -253,48 +335,128 @@ def run(
         # Get bounding box output from backbone
         bbox_preds = preds[0].clone()
         # Convert predictions to absolute coordinates
-        bbox_preds[:, 2], bbox_preds[:, 3] = bbox_preds[:, 0] + bbox_preds[:, 2], bbox_preds[:, 1] + bbox_preds[:, 3]
+        bbox_preds[:, 2], bbox_preds[:, 3] = (
+            bbox_preds[:, 0] + bbox_preds[:, 2],
+            bbox_preds[:, 1] + bbox_preds[:, 3],
+        )
         bboxes = [bbox_preds[:, :4]]
-
+        update = False
+        pred_before = None
         # If there are bbox predictions, process the new prediction logic
         if bboxes[0].shape[0] > 0:
             # Get meal predictions
             meal_pred_preliminary = meal((small, medium, large, bboxes, global_feature))
             # Get classification prediction for each bounding box
-            meal_pred_preliminary = torch.argmax(meal_pred_preliminary, dim=1).cpu().numpy().tolist()
+            meal_pred_preliminary = (
+                torch.argmax(meal_pred_preliminary, dim=1).cpu().numpy().tolist()
+            )
             meal_pred = []
-            
+
             # Since an image might have multiple bbox, hence multiple classifications, we do a majority voting
-            if isinstance(MEAL, MEAL_with_masked_attention):
+            # import pdb; pdb.set_trace()
+            meal_count = 0
+            if isinstance(meal, MEAL_with_masked_attention) or isinstance(meal, MEAL):
                 last_index = 0
                 for box in bboxes:
                     if len(box) <= 0:
                         meal_pred.append(-1)
                         continue
                     number_of_boxes = box.shape[0]
-                    u, c = np.unique(np.array(meal_pred_preliminary[last_index:last_index+number_of_boxes]), return_counts = True)
-
+                    u, c = np.unique(
+                        np.array(
+                            meal_pred_preliminary[
+                                last_index : last_index + number_of_boxes
+                            ]
+                        ),
+                        return_counts=True,
+                    )
                     y = u[c == c.max()].tolist()[0]
+
+                    meal2, meal3 = 0, 0
+                    if 2 in u:
+                        meal2 = c[u == 2].tolist()[0]
+                    if 3 in u:
+                        meal3 = c[u == 3].tolist()[0]
+
+                    if meal2 >= c.max():
+                        y = 2
+                    elif meal3 >= c.max():
+                        y = 3
+
                     meal_pred.append(y)
+                    if y in [2, 3]:
+                        meal_count = meal2 if y == 2 else meal3
                     last_index = number_of_boxes
             else:
                 meal_pred = meal_pred_preliminary
-                
+
+            # Method 3
+            upred, cpred = np.unique(
+                np.array(preds[0][:, -1].cpu().numpy().tolist()),
+                return_counts=True,
+            )
+
+            pred2, pred3 = 0, 0
+            if 2 in upred:
+                pred2 = cpred[upred == 2].tolist()[0]
+            if 3 in upred:
+                pred3 = cpred[upred == 3].tolist()[0]
+
+            # st()
+            # print(meal_count, pred2, pred3)
+            if (
+                meal_pred[0] in [2, 3]
+                and pred2
+                and pred3
+                and (
+                    (meal_pred[0] == 2 and pred2 >= pred3)
+                    or (meal_pred[0] == 3 and pred3 >= pred2)
+                )
+            ):
+                print("update")
+                update = True
+                pred_before = preds[0][preds[0][:, -2] >= 0.5, -1].cpu().numpy().tolist().copy()
+                preds[0][:, -1] = torch.where(
+                    preds[0][:, -1] == 2.0, float(meal_pred[0]), preds[0][:, -1]
+                )
+                preds[0][:, -1] = torch.where(
+                    preds[0][:, -1] == 3.0, float(meal_pred[0]), preds[0][:, -1]
+                )
+                # preds[0][:, -2] = torch.where(
+                #     (preds[0][:, -1] == float(meal_pred[0])) & (preds[0][:, -2] > 0.5), 0.9, preds[0][:, -2]
+                # )
+
+            # Method 2
+            # if meal_pred[0] in [2, 3]:
+            #     preds[0][:, -1] = torch.where(
+            #         preds[0][:, -1] == 2, float(meal_pred[0]), preds[0][:, -1]
+            #     )
+            #     preds[0][:, -1] = torch.where(
+            #         preds[0][:, -1] == 3, float(meal_pred[0]), preds[0][:, -1]
+            #     )
+
+            # Method 1
+            # for ix in range(len(preds[0])):
+            #     if meal_pred_preliminary[ix] in [2, 3] and preds[0][ix, -1] in [2, 3]:
+            #         preds[0][ix, -1] = float(meal_pred_preliminary[ix])
+
             # Replace backbone predictions with MEAL's predictions
-            new_preds = []
-            for img, meal_cls in zip(preds, meal_pred):
-                new_pred = []
-                meal_cls = int(meal_cls)
-                for pred in img:
-                    pred = pred.cpu().numpy().tolist()
-                    # If meal predicts lesions, replace lesion predictions with meal predictions
-                    if int(pred[-1]) in [2, 3] and meal_cls in [2, 3]:
-                        pred[5] = meal_cls
-                    new_pred.append(pred)
-                new_preds.append(torch.tensor(new_pred).to(device))
-            preds = new_preds
+            # new_preds = []
+            # for img, meal_cls in zip(preds, meal_pred):
+            #     new_pred = []
+            #     meal_cls = int(meal_cls)
+            #     for pred in img:
+            #         pred = pred.cpu().numpy().tolist()
+            #         # If meal predicts lesions, replace lesion predictions with meal predictions
+            #         if int(pred[-1]) in [2, 3] and meal_cls in [2, 3]:
+            #             print("pred: {}".format(pred[5]))
+            #             print("meal_cls: {}".format(meal_cls))
+            #             pred[5] = meal_cls
+            #         new_pred.append(pred)
+            #     new_preds.append(torch.tensor(new_pred).to(device))
+            # preds = new_preds
         # New #
-        
+
         # Metrics
         for si, pred in enumerate(preds):
             labels = targets[targets[:, 0] == si, 1:]
@@ -305,57 +467,116 @@ def run(
 
             if npr == 0:
                 if nl:
-                    stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                    stats.append(
+                        (correct, *torch.zeros((2, 0), device=device), labels[:, 0])
+                    )
                     if plots:
-                        confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                        confusion_matrix.process_batch(
+                            detections=None, labels=labels[:, 0]
+                        )
                 continue
 
             # Predictions
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            scale_boxes(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
+            scale_boxes(
+                im[si].shape[1:], predn[:, :4], shape, shapes[si][1]
+            )  # native-space pred
 
             # Evaluate
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-                scale_boxes(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+                scale_boxes(
+                    im[si].shape[1:], tbox, shape, shapes[si][1]
+                )  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
                     confusion_matrix.process_batch(predn, labelsn)
-            stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
+            stats.append(
+                (correct, pred[:, 4], pred[:, 5], labels[:, 0])
+            )  # (correct, conf, pcls, tcls)
+            # import pdb; pdb.set_trace()
+            # temp = (
+            #     len(
+            #         np.intersect1d(
+            #             pred[pred[:, 4] >= 0.5, 5].cpu().numpy(),
+            #             labels[:, 0].cpu().numpy(),
+            #         )
+            #     )
+            #     / len(labels)
+            #     * 100
+            # )
+            # if update and temp != 100:
+            #     bad.append(
+            #         {
+            #             "path": str(path),
+            #             "backbone_pred": pred_before,
+            #             "meal_pred": pred[pred[:, 4] >= 0.5, 5].cpu().numpy().tolist(),
+            #             "label": labels[:, 0].cpu().numpy().tolist(),
+            #             "correct_ratio": temp,
+            #         }
+            #     )
+            #     print(paths[0], temp)
+            #     print(pred[pred[:, 4] >= 0.5, 5], labels[:, 0])
 
             # Save/log
             if save_txt:
-                save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / f'{path.stem}.txt')
+                save_one_txt(
+                    predn,
+                    save_conf,
+                    shape,
+                    file=save_dir / "labels" / f"{path.stem}.txt",
+                )
             if save_json:
-                save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
-            callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
+                save_one_json(
+                    predn, jdict, path, class_map
+                )  # append to COCO-JSON dictionary
+            callbacks.run("on_val_image_end", pred, predn, path, names, im[si])
 
         # Plot images
         if plots and batch_i < 3:
             try:
-                plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
-                plot_images(im, output_to_target(preds), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
+                plot_images(
+                    im,
+                    targets,
+                    paths,
+                    save_dir / f"val_batch{batch_i}_labels.jpg",
+                    names,
+                )  # labels
+                plot_images(
+                    im,
+                    output_to_target(preds),
+                    paths,
+                    save_dir / f"val_batch{batch_i}_pred.jpg",
+                    names,
+                )  # pred
             except Exception as e:
                 print(e)
 
-        callbacks.run('on_val_batch_end', batch_i, im, targets, paths, shapes, preds)
+        callbacks.run("on_val_batch_end", batch_i, im, targets, paths, shapes, preds)
+
+    # with open("bad4.json", "w") as f:
+    #     json.dump(bad, f, indent=4, sort_keys=True)
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+        tp, fp, p, r, f1, ap, ap_class = ap_per_class(
+            *stats, plot=plots, save_dir=save_dir, names=names
+        )
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
     nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
 
     # Print results
-    pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
-    LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+    pf = "%22s" + "%11i" * 2 + "%11.3g" * 4  # print format
+    LOGGER.info(pf % ("all", seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
-        LOGGER.warning(f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
+        LOGGER.warning(
+            f"WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels"
+        )
 
     # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
@@ -363,23 +584,34 @@ def run(
             LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
 
     # Print speeds
-    t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
+    t = tuple(x.t / seen * 1e3 for x in dt)  # speeds per image
     if not training:
         shape = (batch_size, 3, imgsz, imgsz)
-        LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}' % t)
+        LOGGER.info(
+            f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}"
+            % t
+        )
 
     # Plots
     if plots:
         confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
-        callbacks.run('on_val_end', nt, tp, fp, p, r, f1, ap, ap50, ap_class, confusion_matrix)
+        callbacks.run(
+            "on_val_end", nt, tp, fp, p, r, f1, ap, ap50, ap_class, confusion_matrix
+        )
 
     # Save JSON
     if save_json and len(jdict):
-        w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
-        anno_json = str(Path('../datasets/coco/annotations/instances_val2017.json'))  # annotations
+        w = (
+            Path(weights[0] if isinstance(weights, list) else weights).stem
+            if weights is not None
+            else ""
+        )  # weights
+        anno_json = str(
+            Path("../datasets/coco/annotations/instances_val2017.json")
+        )  # annotations
         pred_json = str(save_dir / f"{w}_predictions.json")  # predictions
-        LOGGER.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
-        with open(pred_json, 'w') as f:
+        LOGGER.info(f"\nEvaluating pycocotools mAP... saving {pred_json}...")
+        with open(pred_json, "w") as f:
             json.dump(jdict, f)
 
         # try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
@@ -402,7 +634,11 @@ def run(
     # Return results
     model.float()  # for training
     if not training:
-        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
+        s = (
+            f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}"
+            if save_txt
+            else ""
+        )
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
@@ -412,74 +648,140 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
-    parser.add_argument('--batch-size', type=int, default=32, help='batch size')
-    parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
-    parser.add_argument('--max-det', type=int, default=300, help='maximum detections per image')
-    parser.add_argument('--task', default='val', help='train, val, test, speed or study')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
-    parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
-    parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--verbose', action='store_true', help='report mAP by class')
-    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
-    parser.add_argument('--save-hybrid', action='store_true', help='save label+prediction hybrid results to *.txt')
-    parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
-    parser.add_argument('--save-json', action='store_true', help='save a COCO-JSON results file')
-    parser.add_argument('--project', default=ROOT / 'runs/val', help='save to project/name')
-    parser.add_argument('--name', default='exp', help='save to project/name')
-    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
-    parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
-    parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
-    parser.add_argument('--meal-path', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
-    parser.add_argument('--meal-type', default='MEAL', help='save to project/name')
+    parser.add_argument(
+        "--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path"
+    )
+    parser.add_argument(
+        "--weights",
+        nargs="+",
+        type=str,
+        default=ROOT / "yolov5s.pt",
+        help="model path(s)",
+    )
+    parser.add_argument("--batch-size", type=int, default=32, help="batch size")
+    parser.add_argument(
+        "--imgsz",
+        "--img",
+        "--img-size",
+        type=int,
+        default=640,
+        help="inference size (pixels)",
+    )
+    parser.add_argument(
+        "--conf-thres", type=float, default=0.001, help="confidence threshold"
+    )
+    parser.add_argument(
+        "--iou-thres", type=float, default=0.6, help="NMS IoU threshold"
+    )
+    parser.add_argument(
+        "--max-det", type=int, default=300, help="maximum detections per image"
+    )
+    parser.add_argument(
+        "--task", default="val", help="train, val, test, speed or study"
+    )
+    parser.add_argument(
+        "--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="max dataloader workers (per RANK in DDP mode)",
+    )
+    parser.add_argument(
+        "--single-cls", action="store_true", help="treat as single-class dataset"
+    )
+    parser.add_argument("--augment", action="store_true", help="augmented inference")
+    parser.add_argument("--verbose", action="store_true", help="report mAP by class")
+    parser.add_argument("--save-txt", action="store_true", help="save results to *.txt")
+    parser.add_argument(
+        "--save-hybrid",
+        action="store_true",
+        help="save label+prediction hybrid results to *.txt",
+    )
+    parser.add_argument(
+        "--save-conf", action="store_true", help="save confidences in --save-txt labels"
+    )
+    parser.add_argument(
+        "--save-json", action="store_true", help="save a COCO-JSON results file"
+    )
+    parser.add_argument(
+        "--project", default=ROOT / "runs/val", help="save to project/name"
+    )
+    parser.add_argument("--name", default="exp", help="save to project/name")
+    parser.add_argument(
+        "--exist-ok",
+        action="store_true",
+        help="existing project/name ok, do not increment",
+    )
+    parser.add_argument(
+        "--half", action="store_true", help="use FP16 half-precision inference"
+    )
+    parser.add_argument(
+        "--dnn", action="store_true", help="use OpenCV DNN for ONNX inference"
+    )
+    parser.add_argument(
+        "--meal-path",
+        nargs="+",
+        type=str,
+        default=ROOT / "yolov5s.pt",
+        help="model path(s)",
+    )
+    parser.add_argument("--meal-type", default="MEAL", help="save to project/name")
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
-    opt.save_json |= opt.data.endswith('coco.yaml')
+    opt.save_json |= opt.data.endswith("coco.yaml")
     opt.save_txt |= opt.save_hybrid
     print_args(vars(opt))
     return opt
 
 
 def main(opt):
-    check_requirements(exclude=('tensorboard', 'thop'))
+    check_requirements(exclude=("tensorboard", "thop"))
 
-    if opt.task in ('train', 'val', 'test'):  # run normally
+    if opt.task in ("train", "val", "test"):  # run normally
         if opt.conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
-            LOGGER.info(f'WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results')
+            LOGGER.info(
+                f"WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results"
+            )
         if opt.save_hybrid:
-            LOGGER.info('WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone')
+            LOGGER.info(
+                "WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone"
+            )
         run(**vars(opt))
 
     else:
         weights = opt.weights if isinstance(opt.weights, list) else [opt.weights]
-        opt.half = torch.cuda.is_available() and opt.device != 'cpu'  # FP16 for fastest results
-        if opt.task == 'speed':  # speed benchmarks
+        opt.half = (
+            torch.cuda.is_available() and opt.device != "cpu"
+        )  # FP16 for fastest results
+        if opt.task == "speed":  # speed benchmarks
             # python val.py --task speed --data coco.yaml --batch 1 --weights yolov5n.pt yolov5s.pt...
             opt.conf_thres, opt.iou_thres, opt.save_json = 0.25, 0.45, False
             for opt.weights in weights:
                 run(**vars(opt), plots=False)
 
-        elif opt.task == 'study':  # speed vs mAP benchmarks
+        elif opt.task == "study":  # speed vs mAP benchmarks
             # python val.py --task study --data coco.yaml --iou 0.7 --weights yolov5n.pt yolov5s.pt...
             for opt.weights in weights:
-                f = f'study_{Path(opt.data).stem}_{Path(opt.weights).stem}.txt'  # filename to save to
-                x, y = list(range(256, 1536 + 128, 128)), []  # x axis (image sizes), y axis
+                f = f"study_{Path(opt.data).stem}_{Path(opt.weights).stem}.txt"  # filename to save to
+                x, y = (
+                    list(range(256, 1536 + 128, 128)),
+                    [],
+                )  # x axis (image sizes), y axis
                 for opt.imgsz in x:  # img-size
-                    LOGGER.info(f'\nRunning {f} --imgsz {opt.imgsz}...')
+                    LOGGER.info(f"\nRunning {f} --imgsz {opt.imgsz}...")
                     r, _, t = run(**vars(opt), plots=False)
                     y.append(r + t)  # results and times
-                np.savetxt(f, y, fmt='%10.4g')  # save
-            os.system('zip -r study.zip study_*.txt')
+                np.savetxt(f, y, fmt="%10.4g")  # save
+            os.system("zip -r study.zip study_*.txt")
             plot_val_study(x=x)  # plot
         else:
-            raise NotImplementedError(f'--task {opt.task} not in ("train", "val", "test", "speed", "study")')
+            raise NotImplementedError(
+                f'--task {opt.task} not in ("train", "val", "test", "speed", "study")'
+            )
 
 
 if __name__ == "__main__":
     opt = parse_opt()
     main(opt)
-
